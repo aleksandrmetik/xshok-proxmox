@@ -144,7 +144,7 @@ if [ "$(grep "BEGIN RSA PUBLIC KEY" /etc/tinc/xsvpn/rssa_key.pub 2> /dev/null)" 
     echo "Using Previous RSA Keys"
   else
     echo "Generating New RSA Keys"
-    tincd -n xsvpn -K -c /etc/tinc/xsvpn </dev/null 2>/dev/null
+    tincd -n xsvpn -K2048 -c /etc/tinc/xsvpn </dev/null 2>/dev/null
   fi
 else
   echo "Generating New 4096 bit RSA Keys"

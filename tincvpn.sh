@@ -144,7 +144,7 @@ if [ "$(grep "BEGIN RSA PUBLIC KEY" /etc/tinc/xsvpn/rssa_key.pub 2> /dev/null)" 
     echo "Using Previous RSA Keys"
   else
     echo "Generating New RSA Keys"
-    tincd -K4096 -c /etc/tinc/xsvpn </dev/null 2>/dev/null
+    tincd -n xsvpn -K -c /etc/tinc/xsvpn </dev/null 2>/dev/null
   fi
 else
   echo "Generating New 4096 bit RSA Keys"
@@ -157,6 +157,8 @@ Name = $my_name
 AddressFamily = ipv4
 Interface = Tun0
 Mode = switch
+TCPOnly = yes
+
 # Switch: Unicast, multicast and broadcast packaets
 ConnectTo = $vpn_connect_to
 EOF
@@ -166,6 +168,7 @@ Address = ${my_default_v4ip}
 Subnet =  10.10.1.${vpn_ip_last}
 Port = ${vpn_port}
 Compression = 10 #LZO
+TCPOnly = yes
 EOF
 cat /etc/tinc/xsvpn/rsa_key.pub >> "/etc/tinc/xsvpn/hosts/${my_name}"
 
@@ -179,7 +182,7 @@ ip route add 10.10.1.0/24 dev \$INTERFACE
 route add -net 224.0.0.0 netmask 240.0.0.0 dev \$INTERFACE
 
 # To allow IP forwarding:
-#echo 1 > /proc/sys/net/ipv4/ip_forward
+echo 1 > /proc/sys/net/ipv4/ip_forward
 
 # To limit the chance of Corosync Totem re-transmission issues:
 #echo 0 > /sys/devices/virtual/net/\$INTERFACE/bridge/multicast_snooping

@@ -148,7 +148,7 @@ if [ "$(grep "BEGIN RSA PUBLIC KEY" /etc/tinc/xsvpn/rssa_key.pub 2> /dev/null)" 
   fi
 else
   echo "Generating New 4096 bit RSA Keys"
-  tincd -K4096 -c /etc/tinc/xsvpn </dev/null 2>/dev/null
+  tincd -K2048 -c /etc/tinc/xsvpn </dev/null 2>/dev/null
 fi
 
 #Generate Configs

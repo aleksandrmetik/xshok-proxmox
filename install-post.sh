@@ -101,7 +101,7 @@ systemctl enable ksm
 echo "Y" | pveceph install
 
 ## Install common system utilities
-/usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::='--force-confdef' install whois omping tmux sshpass wget axel nano pigz net-tools htop iptraf iotop iftop iperf vim vim-nox unzip zip software-properties-common aptitude curl dos2unix dialog mlocate build-essential git ipset
+/usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::='--force-confdef' install whois omping tmux sshpass wget axel nano pigz net-tools htop iptraf iotop iftop iperf vim vim-nox unzip zip software-properties-common aptitude curl dos2unix dialog mlocate build-essential git ipset sysstat mc
 #snmpd snmp-mibs-downloader
 
 ## Detect AMD EPYC CPU and install kernel 4.15
@@ -116,6 +116,11 @@ if [ "$(grep -i -m 1 "model name" /proc/cpuinfo | grep -i "EPYC")" != "" ]; then
   echo "Installing kernel 4.15"
   /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::='--force-confdef' install pve-kernel-4.15
 fi
+
+## Add msrs ignore to fix Windows guest on EPIC/Ryzen host INFR-199
+echo "options kvm ignore_msrs=Y" >> /etc/modprobe.d/kvm.conf
+echo "options kvm report_ignored_msrs=N" >> /etc/modprobe.d/kvm.conf
+
 
 ## Install kexec, allows for quick reboots into the latest updated kernel set as primary in the boot-loader.
 # use command 'reboot-quick'
@@ -214,7 +219,6 @@ sed -i "s/#ionice:.*/ionice: 1/" /etc/vzdump.conf
 echo "vm.swappiness=10" >> /etc/sysctl.conf
 sysctl -p
 
-
 ## Remove subscription banner
 if [ -f "/usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js" ] ; then
 	sed -i "s/data.status !== 'Active'/false/g" /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
@@ -227,24 +231,26 @@ EOF
 	chmod 755 /etc/cron.daily/proxmox-nosub
 fi
 
+## commented to resolve script issue
 ## Pretty MOTD BANNER
-if [ -z "${NO_MOTD_BANNER}" ] ; then
-	if ! grep -q https "/etc/motd" ; then
-	cat <<'EOF' > /etc/motd.new
-	   This system is optimised by:            https://eXtremeSHOK.com
-	     __   ___                            _____ _    _  ____  _  __
-	     \ \ / / |                          / ____| |  | |/ __ \| |/ /
-	  ___ \ V /| |_ _ __ ___ _ __ ___   ___| (___ | |__| | |  | | ' /
-	 / _ \ > < | __| '__/ _ \ '_ ` _ \ / _ \\___ \|  __  | |  | |  <
-	|  __// . \| |_| | |  __/ | | | | |  __/____) | |  | | |__| | . \
-	 \___/_/ \_\\__|_|  \___|_| |_| |_|\___|_____/|_|  |_|\____/|_|\_\
-
-
-	EOF
-		cat /etc/motd >> /etc/motd.new
-		mv /etc/motd.new /etc/motd
-	fi
-fi
+#if [ -z "${NO_MOTD_BANNER}" ] ; then
+#	if ! grep -q https "/etc/motd" ; then
+#	cat <<'EOF' > /etc/motd.new
+#	   This system is optimised by:            https://eXtremeSHOK.com
+#	     __   ___                            _____ _    _  ____  _  __
+#	     \ \ / / |                          / ____| |  | |/ __ \| |/ /
+#	  ___ \ V /| |_ _ __ ___ _ __ ___   ___| (___ | |__| | |  | | ' /
+#	 / _ \ > < | __| '__/ _ \ '_ ` _ \ / _ \\___ \|  __  | |  | |  <
+#	|  __// . \| |_| | |  __/ | | | | |  __/____) | |  | | |__| | . \
+#	 \___/_/ \_\\__|_|  \___|_| |_| |_|\___|_____/|_|  |_|\____/|_|\_\
+#
+#	Applied fork from: https://github.com/aleksandrmetik/xshok-proxmox
+#
+#	EOF
+#		cat /etc/motd >> /etc/motd.new
+#		mv /etc/motd.new /etc/motd
+#	fi
+#fi
 
 ## Increase max user watches
 # BUG FIX : No space left on device
@@ -255,15 +261,23 @@ sysctl -p /etc/sysctl.conf
 ## Increase max FD limit / ulimit
 cat <<EOF >> /etc/security/limits.conf
 # eXtremeSHOK.com Increase max FD limit / ulimit
-* soft     nproc          131072
-* hard     nproc          131072
-* soft     nofile         131072
-* hard     nofile         131072
-root soft     nproc          131072
-root hard     nproc          131072
-root soft     nofile         131072
-root hard     nofile         131072
+* soft     nproc          256000
+* hard     nproc          256000
+* soft     nofile         256000
+* hard     nofile         256000
+root soft     nproc          256000
+root hard     nproc          256000
+root soft     nofile         256000
+root hard     nofile         256000
 EOF
+
+echo "DefaultLimitNOFILE=256000" >> /etc/systemd/system.conf
+echo "DefaultLimitNOFILE=256000" >> /etc/systemd/user.conf
+echo 'session required pam_limits.so' | tee -a /etc/pam.d/common-session-noninteractive
+echo 'session required pam_limits.so' | tee -a /etc/pam.d/common-session
+echo 'session required pam_limits.so' | tee -a /etc/pam.d/runuser-l
+cd ~ && echo "ulimit -n 256000" >> .bashrc ; echo "ulimit -n 256000" >> .profile
+
 
 ## Increase kernel max Key limit
 cat <<EOF > /etc/sysctl.d/60-maxkeys.conf
@@ -288,19 +302,23 @@ if [ "$(command -v zfs)" != "" ] ; then
 # eXtremeSHOK.com ZFS tuning
 
 # Use 1/16 RAM for MAX cache, 1/8 RAM for MIN cache, or 1GB
-options zfs zfs_arc_min=$MY_ZFS_ARC_MIN
-options zfs zfs_arc_max=$MY_ZFS_ARC_MAX
-
+	options zfs zfs_arc_min=$MY_ZFS_ARC_MIN
+	options zfs zfs_arc_max=$MY_ZFS_ARC_MAX
 # use the prefetch method
-options zfs l2arc_noprefetch=0
-
+	options zfs l2arc_noprefetch=0
 # max write speed to l2arc
 # tradeoff between write/read and durability of ssd (?)
 # default : 8 * 1024 * 1024
 # setting here : 500 * 1024 * 1024
-options zfs l2arc_write_max=524288000
+	options zfs l2arc_write_max=524288000
 EOF
 fi
+
+## Install RCLONE and config
+curl https://rclone.org/install.sh | bash
+rclone config
+
+rclone lsd s3-proxmox-backups:proxmox-backups-office/backups
 
 ## Script Finish
 echo -e '\033[1;33m Finished....please restart the system \033[0m'

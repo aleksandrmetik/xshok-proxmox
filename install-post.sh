@@ -16,7 +16,7 @@
 # Assumptions: proxmox installed
 #
 # Notes:
-# to disable the MOTD banner, set the env NO_MOTD_BANNER to true (export NO_MOTD_BANNER=true) 
+# to disable the MOTD banner, set the env NO_MOTD_BANNER to true (export NO_MOTD_BANNER=true)
 #
 ################################################################################
 #
@@ -117,10 +117,11 @@ if [ "$(grep -i -m 1 "model name" /proc/cpuinfo | grep -i "EPYC")" != "" ]; then
   /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::='--force-confdef' install pve-kernel-4.15
 fi
 
-## Add msrs ignore to fix Windows guest on EPIC/Ryzen host INFR-199
-echo "options kvm ignore_msrs=Y" >> /etc/modprobe.d/kvm.conf
-echo "options kvm report_ignored_msrs=N" >> /etc/modprobe.d/kvm.conf
-
+if [ "$(grep -i -m 1 "model name" /proc/cpuinfo | grep -i "EPYC")" != "" ] || [ "$(grep -i -m 1 "model name" /proc/cpuinfo | grep -i "Ryzen")" != "" ]; then
+  ## Add msrs ignore to fix Windows guest on EPIC/Ryzen host
+  echo "options kvm ignore_msrs=Y" >> /etc/modprobe.d/kvm.conf
+  echo "options kvm report_ignored_msrs=N" >> /etc/modprobe.d/kvm.conf
+fi
 
 ## Install kexec, allows for quick reboots into the latest updated kernel set as primary in the boot-loader.
 # use command 'reboot-quick'
@@ -180,8 +181,9 @@ chmod +x /bin/gzip
 ## Detect if this is an OVH server by getting the global IP and checking the ASN
 if [ "$(whois -h v4.whois.cymru.com " -t $(curl ipinfo.io/ip 2> /dev/null)" | tail -n 1 | cut -d'|' -f3 | grep -i "ovh")" != "" ] ; then
   echo "Deteted OVH Server, installing OVH RTM (real time monitoring)"
-  #http://help.ovh.co.uk/RealTimeMonitoring
-  wget ftp://ftp.ovh.net/made-in-ovh/rtm/install_rtm.sh -c -O install_rtm.sh && bash install_rtm.sh && rm install_rtm.sh
+  # http://help.ovh.co.uk/RealTimeMonitoring
+  # https://docs.ovh.com/gb/en/dedicated/install-rtm/
+  wget -qO - https://last-public-ovh-infra-yak.snap.mirrors.ovh.net/yak/archives/apply.sh | OVH_PUPPET_MANIFEST=distribyak/catalog/master/puppet/manifests/common/rtmv2.pp bash
 fi
 
 ## Protect the web interface with fail2ban
@@ -192,7 +194,7 @@ cat <<EOF > /etc/fail2ban/filter.d/proxmox.conf
 failregex = pvedaemon\[.*authentication failure; rhost=<HOST> user=.* msg=.*
 ignoreregex =
 EOF
-cat <<EOF > /etc/fail2ban/jail.d/proxmox
+cat <<EOF > /etc/fail2ban/jail.d/proxmox.conf
 [proxmox]
 enabled = true
 port = https,http,8006
@@ -213,22 +215,26 @@ systemctl enable fail2ban
 ## Increase vzdump backup speed, enable pigz and fix ionice
 sed -i "s/#bwlimit:.*/bwlimit: 0/" /etc/vzdump.conf
 sed -i "s/#pigz:.*/pigz: 1/" /etc/vzdump.conf
-sed -i "s/#ionice:.*/ionice: 1/" /etc/vzdump.conf
+sed -i "s/#ionice:.*/ionice: 5/" /etc/vzdump.conf
 
 ## Bugfix: pve 5.1 high swap usage with low memory usage
 echo "vm.swappiness=10" >> /etc/sysctl.conf
 sysctl -p
 
+## Bugfix: reserve 512MB memory for system
+echo "vm.min_free_kbytes = 524288" >> /etc/sysctl.conf
+sysctl -p
+
 ## Remove subscription banner
 if [ -f "/usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js" ] ; then
-	sed -i "s/data.status !== 'Active'/false/g" /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
-# create a daily cron to make sure the banner does not re-appear
-	cat <<'EOF' > /etc/cron.daily/proxmox-nosub
+  sed -i "s/data.status !== 'Active'/false/g" /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+  # create a daily cron to make sure the banner does not re-appear
+  cat <<'EOF' > /etc/cron.daily/proxmox-nosub
 #!/bin/sh
 # eXtremeSHOK.com Remove subscription banner
 sed -i "s/data.status !== 'Active'/false/g" /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
 EOF
-	chmod 755 /etc/cron.daily/proxmox-nosub
+  chmod 755 /etc/cron.daily/proxmox-nosub
 fi
 
 ## commented to resolve script issue
@@ -252,6 +258,7 @@ fi
 #	fi
 #fi
 
+
 ## Increase max user watches
 # BUG FIX : No space left on device
 echo 1048576 > /proc/sys/fs/inotify/max_user_watches
@@ -271,6 +278,14 @@ root soft     nofile         256000
 root hard     nofile         256000
 EOF
 
+## Enable TCP BBR congestion control
+cat <<EOF > /etc/sysctl.d/10-kernel-bbr.conf
+# eXtremeSHOK.com
+# TCP BBR congestion control
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+
 echo "DefaultLimitNOFILE=256000" >> /etc/systemd/system.conf
 echo "DefaultLimitNOFILE=256000" >> /etc/systemd/user.conf
 echo 'session required pam_limits.so' | tee -a /etc/pam.d/common-session-noninteractive
@@ -282,23 +297,40 @@ cd ~ && echo "ulimit -n 256000" >> .bashrc ; echo "ulimit -n 256000" >> .profile
 ## Increase kernel max Key limit
 cat <<EOF > /etc/sysctl.d/60-maxkeys.conf
 # eXtremeSHOK.com
+# Increase kernel max Key limit
 kernel.keys.root_maxkeys=1000000
 kernel.keys.maxkeys=1000000
 EOF
 
+## Set systemd ulimits
+echo "DefaultLimitNOFILE=256000" >> /etc/systemd/system.conf
+echo "DefaultLimitNOFILE=256000" >> /etc/systemd/user.conf
+echo 'session required pam_limits.so' | tee -a /etc/pam.d/common-session-noninteractive
+echo 'session required pam_limits.so' | tee -a /etc/pam.d/common-session
+echo 'session required pam_limits.so' | tee -a /etc/pam.d/runuser-l
+
+## Set ulimit for the shell user
+cd ~ && echo "ulimit -n 256000" >> .bashrc ; echo "ulimit -n 256000" >> .profile
 
 ## Optimise ZFS arc size
 if [ "$(command -v zfs)" != "" ] ; then
-	RAM_SIZE_GB=$(( $(vmstat -s | grep -i "total memory" | xargs | cut -d" " -f 1) / 1024 / 1000))
-	if [[ RAM_SIZE_GB -lt 16 ]] ; then
-		# 1GB/1GB
-		MY_ZFS_ARC_MIN=1073741824
-		MY_ZFS_ARC_MAX=1073741824
-	else
-		MY_ZFS_ARC_MIN=$((RAM_SIZE_GB * 1073741824 / 16))
-	  MY_ZFS_ARC_MAX=$((RAM_SIZE_GB * 1073741824 / 8))
-	fi
-	cat <<EOF > /etc/modprobe.d/zfs.conf
+  RAM_SIZE_GB=$(( $(vmstat -s | grep -i "total memory" | xargs | cut -d" " -f 1) / 1024 / 1000))
+  if [[ RAM_SIZE_GB -lt 16 ]] ; then
+    # 1GB/1GB
+    MY_ZFS_ARC_MIN=1073741824
+    MY_ZFS_ARC_MAX=1073741824
+  else
+    MY_ZFS_ARC_MIN=$((RAM_SIZE_GB * 1073741824 / 16))
+    MY_ZFS_ARC_MAX=$((RAM_SIZE_GB * 1073741824 / 8))
+  fi
+  # Enforce the minimum, incase of a faulty vmstat
+  if [[ MY_ZFS_ARC_MIN -lt 1073741824 ]] ; then
+    MY_ZFS_ARC_MIN=1073741824
+  fi
+  if [[ MY_ZFS_ARC_MAX -lt 1073741824 ]] ; then
+    MY_ZFS_ARC_MAX=1073741824
+  fi
+  cat <<EOF > /etc/modprobe.d/zfs.conf
 # eXtremeSHOK.com ZFS tuning
 
 # Use 1/16 RAM for MAX cache, 1/8 RAM for MIN cache, or 1GB
@@ -319,6 +351,10 @@ curl https://rclone.org/install.sh | bash
 rclone config
 
 rclone lsd s3-proxmox-backups:proxmox-backups-office/backups
+
+# propagate the setting into the kernel
+update-initramfs -u -k all
+
 
 ## Script Finish
 echo -e '\033[1;33m Finished....please restart the system \033[0m'
